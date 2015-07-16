@@ -5,7 +5,7 @@ import (
 )
 
 
-func TestLoadPostalCodes(t *testing.T) {
+func TestGetDb(t *testing.T) {
 
 
 	want := [][]string{
@@ -39,7 +39,7 @@ func TestLoadPostalCodes(t *testing.T) {
 	}
 
 	// Test reading file
-	got, _ := LoadPostalCodes("XX")
+	got, _ := GetDb("XX")
 	if len(got) != len(want) {
 		t.Errorf("Error reading file. Expected len %d, but read %d", len(want), len(got))
 	}
@@ -54,7 +54,7 @@ func TestLoadPostalCodes(t *testing.T) {
 
 func TestPostalCodesNotFound(t *testing.T) {
 	// Test reading file
-	got, err := LoadPostalCodes("YY")
+	got, err := GetDb("YY")
 	if got != nil {
 		t.Errorf("Expected getting nil data")
 	}
