@@ -35,6 +35,20 @@ func mx(cityCode string) string {
 	)
 }
 
+func PhoneNumberGen(countryCode, cityCode string) (<-chan string, error) {
+	f := generators[countryCode]
+	if f == nil {
+		return nil, fmt.Errorf("No generator function found for country code %s", countryCode)
+	}
+	c := make(chan string)
+	go func() {
+		for {
+			c <- f(cityCode)
+		}
+	}()
+	return c, nil
+}
+
 func init() {
 	generators = make(gen_map)
 	generators["MX"] = mx

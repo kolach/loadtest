@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"bytes"
 	"encoding/csv"
+	"github.com/op/go-logging"
 )
 
 const (
@@ -22,6 +23,8 @@ const (
 	FIELDS_PER_RECORD
 )
 
+var log = logging.MustGetLogger("random")
+
 type PostalCodesDb [][]string
 type PostalCodesMap map[string]PostalCodesDb
 var postalCodesMap = make(PostalCodesMap)
@@ -31,7 +34,9 @@ var postalCodesMap = make(PostalCodesMap)
 func GetDb(countryCode string) ([][]string, error) {
 
 	db := postalCodesMap[countryCode]
-	if db == nil {	
+	if db == nil {
+
+		log.Debug("Loading postalcodes database for country: %s", countryCode)
 
 		data, err := Asset(fmt.Sprintf("data/%s.txt", countryCode))
 		if err != nil {
@@ -54,6 +59,8 @@ func GetDb(countryCode string) ([][]string, error) {
 		}
 
 		postalCodesMap[countryCode] = db
+
+		log.Debug("Database is loaded for countrycode: %s", countryCode)
 	}
 
 	return db, nil
