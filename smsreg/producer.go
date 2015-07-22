@@ -95,8 +95,8 @@ func (p *Producer) handleRequests(done chan<- bool, killChan <-chan bool) {
 
 	totalProduced 	  := 0
 	totalFailures 	  := 0
-	_totalProduced 	  := 0
-	_totalFailures 	  := 0
+	_totalProduced 	  := 0 // prev
+	_totalFailures 	  := 0 // prev
 
 	for {
 		select {
@@ -230,10 +230,11 @@ func (p *Producer) Produce(killChan <-chan bool) {
 
 	for i := 0; i != p.count; i++ {
 
+		// not blocking channel reader
 		// to interrupt producer loop earlier by Ctrl+C
 		select {
-		case <-doneChan: return
-		default: // continue
+			case <-doneChan: return
+			default: // continue circle
 		}
 
 		p.semChan <- 1
