@@ -20,21 +20,20 @@ const (
 
 
 type Producer struct {
+	url 		string				// URL to send SMS http request
+	startTime 	time.Time			// time of production start
 
-	url 		string
-	startTime 	time.Time
+	serverRespChan <-chan *SmsIn	// read only channel to listen of server responses
 
-	serverRespChan <-chan *SmsIn
+	asyncReqChan chan *AsyncSmsReq	// channel to schedule sms request with async response
 
-	asyncReqChan chan *AsyncSmsReq
 	semChan chan int 				// semaphore channel
 	count int 						// produce this number of users
 
 	phoneGen 	<-chan string		// random phone number generator
 	addressGen 	<-chan string		// random address generator
 
-	countChan chan bool
-
+	countChan chan bool				// channel to count registrations
 }
 
 
@@ -174,15 +173,18 @@ func (p *Producer) handleRequests(done chan<- bool, killChan <-chan bool) {
 
 }
 
-
-
+// Performs SMS request/response to remote Caipirinha server
+// creates async sms requests and writes it to producer's async requests channel
+//
+// smsOut - message to send to server
+// Returns read only channel to receive sms response from server
 func (p *Producer) makeSmsRequest(smsOut *SmsOut) <-chan *SmsIn  {
 	asyncReq, respChan := NewAsyncSmsReq(p.url, smsOut)
 	p.asyncReqChan <- asyncReq
 	return respChan
 }
 
-// TODO handle wanted response logic
+// TODO handle wanted response logic, when unexpected response from server can be received
 func (p *Producer) makeRegistrationStep(phone, step string) bool {
 	// make request and read response from response channel
 	resp := <-p.makeSmsRequest(NewSmsOut(phone, step))
@@ -193,6 +195,7 @@ func (p *Producer) makeRegistrationStep(phone, step string) bool {
 	return true
 }
 
+//
 func (p *Producer) registerUser(phone, address string) {
 
 	log.Debug("Registering and unregistering user with phone %s", phone)
@@ -201,6 +204,8 @@ func (p *Producer) registerUser(phone, address string) {
 		<-p.semChan // release semaphore on exit
 	}()
 
+	// here is the multistepped registration process
+	// if any step fails, the registration is considered failed
 	if 	p.makeRegistrationStep(phone, REGISTER_CMD) &&
 	   	p.makeRegistrationStep(phone, YES) &&
 	   	p.makeRegistrationStep(phone, "25") &&
@@ -219,12 +224,14 @@ func (p *Producer) registerUser(phone, address string) {
 
 }
 
-
+// Produces SMS user registrations
+// killChan - channel to (gracefully) interrupt producer before desired number of registrations is made,
+// or if the producer runs in infinite loop
 func (p *Producer) Produce(killChan <-chan bool) {
 
-	doneChan := make(chan bool)
+	doneChan := make(chan bool) // write to this channel when desired number of registrations is made
 
-	go p.handleRequests(doneChan, killChan)
+	go p.handleRequests(doneChan, killChan) // startup request handler
 
 	p.startTime = time.Now() // starting timer
 

@@ -15,11 +15,10 @@ type AsyncSmsReq struct {
 func NewAsyncSmsReq(url string, smsOut *SmsOut) (*AsyncSmsReq, <-chan *SmsIn) {
 	respChan := make(chan *SmsIn)
 	return &AsyncSmsReq{
-		url: url,
-		SmsOut: smsOut,
-		respChan:
-		respChan,
-		timestamp: time.Now(),
+		url			: url,
+		SmsOut		: smsOut,
+		respChan	: respChan,
+		timestamp	: time.Now(),
 	}, respChan
 }
 
