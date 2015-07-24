@@ -156,6 +156,7 @@ func (p *Producer) handleRequests(done <-chan struct{}) chan<- *SmsIn {
 						log.Error("Failed to make http request, %s", err)
 						asyncSmsReq.Cancel()
 					} else {
+						log.Debug("Storing message in request map, %s", asyncSmsReq)
 						requests[asyncSmsReq.Originator] = asyncSmsReq
 						asyncSmsReq.Timestamp()
 					}
@@ -167,8 +168,11 @@ func (p *Producer) handleRequests(done <-chan struct{}) chan<- *SmsIn {
 			case smsIn := <-smsInChan:
 				asyncSmsReq := requests[smsIn.Recipient]
 				if asyncSmsReq != nil {
+					log.Debug("Message received by handler and found in request map, %s", smsIn)
 					delete(requests, smsIn.Recipient)
 					asyncSmsReq.RespondWith(smsIn)
+				} else {
+					log.Debug("Message not found in request map, %s", smsIn)
 				}
 
 			// Periodically check health
@@ -256,7 +260,7 @@ func (p *Producer) Produce(done chan struct{}) {
 
 	p.handleStats(done) // startup request handler
 
-	
+
 	Listen(p.port, done, smsIn1, smsIn2)
 //	Listen(p.port, done, smsIn1)
 
