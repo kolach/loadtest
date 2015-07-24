@@ -20,6 +20,7 @@ const (
 
 
 type Producer struct {
+
 	url 		string				// URL to send SMS http request
 	startTime 	time.Time			// time of production start
 
@@ -85,7 +86,7 @@ func (p *Producer) logStats(totalProduced, totalFailures, _totalProduced, _total
 	return totalProduced, totalFailures
 }
 
-func (p *Producer) handleRequests(done chan<- bool, killChan <-chan bool) {
+func (p *Producer) handleRequests(done chan<- struct{}, killChan <-chan struct{}) {
 
 	httpClient 		  	:= &http.Client{}
 	healthCheckTicker 	:= time.NewTicker(HEALTH_CHECK_INTERVAL)
@@ -148,23 +149,27 @@ func (p *Producer) handleRequests(done chan<- bool, killChan <-chan bool) {
 				}
 			}
 
+		// print statistics
 		case <-statsTicker.C:
 			_totalProduced, _totalFailures =
 				p.logStats(totalProduced, totalFailures, _totalProduced, _totalFailures)
 
+		// registrations counter
+		// if success is true, user successfully registered
 		case success := <-p.countChan:
 			totalProduced++
 			if !success { totalFailures++ }
 			if totalProduced == p.count {
 				p.logSummary(totalProduced, totalFailures)
-				done <- true
+				close(done)
 				return
 			}
 
+		// kill signal received
 		case <-killChan:
 			p.logSummary(totalProduced, totalFailures)
 			<-p.semChan // clear blocking semaphore
-			done <- true
+			close(done)
 			return
 		}
 
@@ -227,9 +232,9 @@ func (p *Producer) registerUser(phone, address string) {
 // Produces SMS user registrations
 // killChan - channel to (gracefully) interrupt producer before desired number of registrations is made,
 // or if the producer runs in infinite loop
-func (p *Producer) Produce(killChan <-chan bool) {
+func (p *Producer) Produce(killChan <-chan struct{}) {
 
-	doneChan := make(chan bool) // write to this channel when desired number of registrations is made
+	doneChan := make(chan struct{}) // write to this channel when desired number of registrations is made
 
 	go p.handleRequests(doneChan, killChan) // startup request handler
 
@@ -250,5 +255,4 @@ func (p *Producer) Produce(killChan <-chan bool) {
 	}
 
 	<-doneChan // wait until done
-
 }

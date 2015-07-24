@@ -28,6 +28,7 @@ func (r *AsyncSmsReq) Cancel() {
 
 func (r *AsyncSmsReq) RespondWith(smsIn *SmsIn) {
 	r.respChan <- smsIn
+	close(r.respChan) // close channel after value is sent
 }
 
 func (r *AsyncSmsReq) IsLonger(d time.Duration) bool {
