@@ -74,7 +74,6 @@ func NewProducer(url string, count, concurrency, port int) *Producer {
 
 
 func (p *Producer) logSummary(totalProduced, totalFailures int) {
-	log.Notice("================================================================================")
 	log.Notice("TIME ELAPSED: %v, TOTAL PRODUCED: %d, TOTAL FAILURES: %d",
 		time.Since(p.startTime), totalProduced, totalFailures)
 }
