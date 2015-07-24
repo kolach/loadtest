@@ -1,45 +1,21 @@
 package smsreg
-
-
 import (
-	"net/http"
-	"io/ioutil"
-	"encoding/json"
 	"fmt"
+	"net/http"
+	"encoding/json"
+	"io/ioutil"
 )
 
-const (
-	URL = "/api/sms/new/transactional/psms"
-)
-
-
-// Incoming Caipirinha Server SMS
-type SmsIn struct {
-	Sender 			string `json:"sender"`
-	Recipient 		string `json:"recipient"`
-	Text 			string `json:"text"`
-	CreateDateTime 	string `json:"createDateTime"`
-	Carrier 		string `json:"carrier"`
-}
-
-// convert SmsRes to string
-func (sms *SmsIn) String() string {
-	// Carrier and Carrier are not interesting fields for current purposes
-	return fmt.Sprintf("Recipient: %s, Text: %s, CreateDateTime: %s", sms.Recipient, sms.Text, sms.CreateDateTime)
-}
-
-
-type apiStatusResponse struct {
+type apiStatResp struct {
 	ResultCode int `json:"resultCode"`
 	Message string `json:"message"`
 }
 
 // Listen incoming SMS
 // port - port to listen
-// out  - incoming output channel
-func Listen(port int) <-chan *SmsIn {
-
-	smsIn := make(chan *SmsIn, 10000)
+// done - channel to listen for done event - on receive should stop listener server
+// smsIns - array of channels (acts like topic) to redirect incoming messages
+func Listen(port int, done <-chan struct{}, smsIns... chan<- *SmsIn) {
 
 	http.HandleFunc(URL, func (w http.ResponseWriter, r *http.Request) {
 		body, _ := ioutil.ReadAll(r.Body)
@@ -53,12 +29,14 @@ func Listen(port int) <-chan *SmsIn {
 
 		// async write to output channel
 		go func() {
-			smsIn <- msg
+			for _, smsIn := range smsIns {
+				smsIn <- msg
+			}
 		}()
 
 		// and responding with ApiStatusResponse structure that server expects to get
 		w.Header().Set("Content-Type", "application/json")
-		json, _ := json.Marshal(&apiStatusResponse{200, "OK"})
+		json, _ := json.Marshal(&apiStatResp{200, "OK"})
 		w.Write(json)
 
 	})
@@ -74,6 +52,4 @@ func Listen(port int) <-chan *SmsIn {
 	log.Notice("Listening port: %d for incomming sms requests", port)
 
 	go server.ListenAndServe()
-
-	return smsIn
 }

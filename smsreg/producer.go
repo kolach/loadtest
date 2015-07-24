@@ -21,10 +21,10 @@ const (
 
 type Producer struct {
 
-	url 		string				// URL to send SMS http request
-	startTime 	time.Time			// time of production start
 
-	serverRespChan <-chan *SmsIn	// read only channel to listen of server responses
+	url 		string				// URL to send SMS http request
+	port        int                	// port to listen for incoming messages
+	startTime 	time.Time			// time of production start
 
 	asyncReqChan chan *AsyncSmsReq	// channel to schedule sms request with async response
 
@@ -56,11 +56,9 @@ func NewProducer(url string, count, concurrency, port int) *Producer {
 	addressGen, err := random.AddressGen("MX")
 	if err != nil { panic(err) }
 
-	serverRespChan := Listen(port)
-
 	p := &Producer{
 		url				: url,
-		serverRespChan	: serverRespChan,
+		port			: port,
 		asyncReqChan	: asyncReqChan,
 		semChan			: semChan,
 		count			: count,
@@ -79,101 +77,121 @@ func (p *Producer) logSummary(totalProduced, totalFailures int) {
 }
 
 func (p *Producer) logStats(totalProduced, totalFailures, _totalProduced, _totalFailures int) (int, int) {
-	log.Notice("Time elapsed: %v, Total Produced: %d (+%d), Total Failures: %d (+%d), Goroutines: %d",
+	log.Notice("Time elapsed: %v, Total Produced: %d (+%d), Total Failures: %d (+%d)",
 		time.Since(p.startTime), totalProduced, totalProduced - _totalProduced,
-		totalFailures, totalFailures - _totalFailures, runtime.NumGoroutine())
+		totalFailures, totalFailures - _totalFailures)
 	return totalProduced, totalFailures
 }
 
-func (p *Producer) handleRequests(done chan<- struct{}, killChan <-chan struct{}) {
 
-	httpClient 		  	:= &http.Client{}
-	healthCheckTicker 	:= time.NewTicker(HEALTH_CHECK_INTERVAL)
-	statsTicker 		:= time.NewTicker(STATS_INTERVAL)
-	requests 		  	:= make(map[string] *AsyncSmsReq)
+// This is statistics handler loop
+// count registrations and exit on totalProduced == count
+func (p *Producer) handleStats(done chan struct{}) {
+
+	statsTicker := time.NewTicker(STATS_INTERVAL)
 
 	totalProduced 	  := 0
 	totalFailures 	  := 0
 	_totalProduced 	  := 0 // prev
 	_totalFailures 	  := 0 // prev
 
-	for {
-		select {
-
-		// make request, and register to wait for response
-		case asyncSmsReq := <-p.asyncReqChan:
-
-			if oldReq, exists := requests[asyncSmsReq.Originator]; exists {
-				log.Critical("Request map already contains a request: %s. Cancelling old one", asyncSmsReq)
-				oldReq.Cancel()
-			}
-
-			httpRequest, err := asyncSmsReq.HttpRequest()
-			if err != nil {
-				log.Error("Failed to create http request object, %s", err)
-				asyncSmsReq.Cancel()
-			} else {
-				// TODO parse and analyse http response
-				log.Debug("Sending sms http request: %s", asyncSmsReq.SmsOut)
-				_, err := httpClient.Do(httpRequest)
-				if err != nil {
-					log.Error("Failed to make http request, %s", err)
-					asyncSmsReq.Cancel()
-				} else {
-					requests[asyncSmsReq.Originator] = asyncSmsReq
-					asyncSmsReq.Timestamp()
+	go func() {
+		for {
+			select {
+			// registrations counter
+			// if success is true, user successfully registered
+			case success := <-p.countChan:
+				totalProduced++
+				if !success { totalFailures++ }
+				if totalProduced == p.count {
+					close(done)
 				}
-			}
 
-
-		// response received, unregister request from waiting and send response to
-		// response channel
-		case smsIn := <-p.serverRespChan:
-			asyncSmsReq := requests[smsIn.Recipient]
-			if asyncSmsReq == nil {
-				log.Warning("No waiting for response request found for recipient %s", smsIn.Recipient)
-			} else {
-				delete(requests, smsIn.Recipient)
-				asyncSmsReq.RespondWith(smsIn)
-			}
-
-		// Periodically check health
-		case <-healthCheckTicker.C:
-			log.Notice("Self diagnostics event. Num of Goroutines: %d", runtime.NumGoroutine())
-			for _, asyncSmsReq := range requests {
-				if asyncSmsReq.IsLonger(MAX_RESPONSE_WAITTIME) {
-					log.Critical("Releasing request: %s", asyncSmsReq.SmsOut)
-					delete(requests, asyncSmsReq.Originator)
-					asyncSmsReq.Cancel()
-				}
-			}
-
-		// print statistics
-		case <-statsTicker.C:
-			_totalProduced, _totalFailures =
+			// print statistics
+			case <-statsTicker.C:
+				_totalProduced, _totalFailures =
 				p.logStats(totalProduced, totalFailures, _totalProduced, _totalFailures)
 
-		// registrations counter
-		// if success is true, user successfully registered
-		case success := <-p.countChan:
-			totalProduced++
-			if !success { totalFailures++ }
-			if totalProduced == p.count {
+			case <-done:
 				p.logSummary(totalProduced, totalFailures)
-				close(done)
 				return
 			}
 
-		// kill signal received
-		case <-killChan:
-			p.logSummary(totalProduced, totalFailures)
-			<-p.semChan // clear blocking semaphore
-			close(done)
-			return
+		}
+	}()
+}
+
+
+
+func (p *Producer) handleRequests(done <-chan struct{}) chan<- *SmsIn {
+
+	smsInChan := make(chan *SmsIn, 1000)
+
+	go func() {
+
+		httpClient 		  	:= &http.Client{}
+		healthCheckTicker 	:= time.NewTicker(HEALTH_CHECK_INTERVAL)
+		requests 		  	:= make(map[string] *AsyncSmsReq)
+
+		for {
+			select {
+
+			// make request, and register to wait for response
+			case asyncSmsReq := <-p.asyncReqChan:
+
+				if oldReq, exists := requests[asyncSmsReq.Originator]; exists {
+					log.Critical("Request map already contains a request: %s. Cancelling old one", asyncSmsReq)
+					oldReq.Cancel()
+				}
+
+				httpRequest, err := asyncSmsReq.HttpRequest()
+				if err != nil {
+					log.Error("Failed to create http request object, %s", err)
+					asyncSmsReq.Cancel()
+				} else {
+					// TODO parse and analyse http response
+					log.Debug("Sending sms http request: %s", asyncSmsReq.SmsOut)
+					_, err := httpClient.Do(httpRequest)
+					if err != nil {
+						log.Error("Failed to make http request, %s", err)
+						asyncSmsReq.Cancel()
+					} else {
+						requests[asyncSmsReq.Originator] = asyncSmsReq
+						asyncSmsReq.Timestamp()
+					}
+				}
+
+
+			// response received, unregister request from waiting and send response to
+			// response channel
+			case smsIn := <-smsInChan:
+				asyncSmsReq := requests[smsIn.Recipient]
+				if asyncSmsReq != nil {
+					delete(requests, smsIn.Recipient)
+					asyncSmsReq.RespondWith(smsIn)
+				}
+
+			// Periodically check health
+			case <-healthCheckTicker.C:
+				log.Notice("Self diagnostics event. Num of Goroutines: %d", runtime.NumGoroutine())
+				for _, asyncSmsReq := range requests {
+					if asyncSmsReq.IsLonger(MAX_RESPONSE_WAITTIME) {
+						log.Critical("Releasing request: %s", asyncSmsReq.SmsOut)
+						delete(requests, asyncSmsReq.Originator)
+						asyncSmsReq.Cancel()
+					}
+				}
+
+			case <-done:
+				<-p.semChan // clear blocking semaphore
+				return
+			}
+
 		}
 
+	}()
 
-	}
+	return smsInChan
 
 }
 
@@ -231,20 +249,23 @@ func (p *Producer) registerUser(phone, address string) {
 // Produces SMS user registrations
 // killChan - channel to (gracefully) interrupt producer before desired number of registrations is made,
 // or if the producer runs in infinite loop
-func (p *Producer) Produce(killChan <-chan struct{}) {
+func (p *Producer) Produce(done chan struct{}) {
 
-	doneChan := make(chan struct{}) // write to this channel when desired number of registrations is made
+	smsIn1 := p.handleRequests(done) // startup request handler #1
+	smsIn2 := p.handleRequests(done) // startup request handler #2
 
-	go p.handleRequests(doneChan, killChan) // startup request handler
+	p.handleStats(done) // startup request handler
+
+	
+	Listen(p.port, done, smsIn1, smsIn2)
+//	Listen(p.port, done, smsIn1)
 
 	p.startTime = time.Now() // starting timer
 
 	for i := 0; i != p.count; i++ {
-
-		// not blocking channel reader
-		// to interrupt producer loop earlier by Ctrl+C
+		// listen done channel for earlier interrupt Ctrl+C
 		select {
-			case <-doneChan: return
+			case <-done: return
 			default: // continue circle
 		}
 
@@ -253,5 +274,5 @@ func (p *Producer) Produce(killChan <-chan struct{}) {
 		runtime.Gosched() // Allow other goroutines to proceed
 	}
 
-	<-doneChan // wait until done
+	<-done // wait until done
 }
