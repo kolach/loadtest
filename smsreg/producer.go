@@ -123,11 +123,13 @@ func (p *Producer) handleStats(done chan struct{}) {
 
 
 
-func (p *Producer) handleRequests(done <-chan struct{}) chan<- *SmsIn {
+func (p *Producer) handleRequests(id int, done <-chan struct{}) chan<- *SmsIn {
 
 	smsInChan := make(chan *SmsIn, 1000)
 
 	go func() {
+
+		id := id
 
 		httpClient 		  	:= &http.Client{}
 		healthCheckTicker 	:= time.NewTicker(HEALTH_CHECK_INTERVAL)
@@ -140,23 +142,23 @@ func (p *Producer) handleRequests(done <-chan struct{}) chan<- *SmsIn {
 			case asyncSmsReq := <-p.asyncReqChan:
 
 				if oldReq, exists := requests[asyncSmsReq.Originator]; exists {
-					log.Critical("Request map already contains a request: %s. Cancelling old one", asyncSmsReq)
+					log.Critical("[%d] Request map already contains a request: %s. Cancelling old one", id, asyncSmsReq.SmsOut)
 					oldReq.Cancel()
 				}
 
 				httpRequest, err := asyncSmsReq.HttpRequest()
 				if err != nil {
-					log.Error("Failed to create http request object, %s", err)
+					log.Error("[%d] Failed to create http request object, %s", id, err)
 					asyncSmsReq.Cancel()
 				} else {
 					// TODO parse and analyse http response
-					log.Debug("Sending sms http request: %s", asyncSmsReq.SmsOut)
+					log.Debug("[%d] Sending sms http request: %s", id, asyncSmsReq.SmsOut)
 					_, err := httpClient.Do(httpRequest)
 					if err != nil {
-						log.Error("Failed to make http request, %s", err)
+						log.Error("[%d] Failed to make http request, %s", id, err)
 						asyncSmsReq.Cancel()
 					} else {
-						log.Debug("Storing message in request map, %s", asyncSmsReq)
+						log.Debug("[%d] Storing message in request map, %s", id, asyncSmsReq.SmsOut)
 						requests[asyncSmsReq.Originator] = asyncSmsReq
 						asyncSmsReq.Timestamp()
 					}
@@ -168,19 +170,19 @@ func (p *Producer) handleRequests(done <-chan struct{}) chan<- *SmsIn {
 			case smsIn := <-smsInChan:
 				asyncSmsReq := requests[smsIn.Recipient]
 				if asyncSmsReq != nil {
-					log.Debug("Message received by handler and found in request map, %s", smsIn)
+					log.Debug("[%d] Message received by handler and found in request map, %s", id, smsIn)
 					delete(requests, smsIn.Recipient)
 					asyncSmsReq.RespondWith(smsIn)
 				} else {
-					log.Debug("Message not found in request map, %s", smsIn)
+					log.Debug("[%d] Message received by handler and NOT found in request map, %s", id, smsIn)
 				}
 
 			// Periodically check health
 			case <-healthCheckTicker.C:
-				log.Notice("Self diagnostics event. Num of Goroutines: %d", runtime.NumGoroutine())
+				log.Notice("[%d] Self diagnostics event. Num of Goroutines: %d", id, runtime.NumGoroutine())
 				for _, asyncSmsReq := range requests {
 					if asyncSmsReq.IsLonger(MAX_RESPONSE_WAITTIME) {
-						log.Critical("Releasing request: %s", asyncSmsReq.SmsOut)
+						log.Critical("[%d] Releasing request: %s", id, asyncSmsReq.SmsOut)
 						delete(requests, asyncSmsReq.Originator)
 						asyncSmsReq.Cancel()
 					}
@@ -255,8 +257,8 @@ func (p *Producer) registerUser(phone, address string) {
 // or if the producer runs in infinite loop
 func (p *Producer) Produce(done chan struct{}) {
 
-	smsIn1 := p.handleRequests(done) // startup request handler #1
-	smsIn2 := p.handleRequests(done) // startup request handler #2
+	smsIn1 := p.handleRequests(1, done) // startup request handler #1
+	smsIn2 := p.handleRequests(2, done) // startup request handler #2
 
 	p.handleStats(done) // startup request handler
 
