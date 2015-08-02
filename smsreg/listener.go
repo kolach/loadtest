@@ -4,7 +4,61 @@ import (
 	"net/http"
 	"encoding/json"
 	"io/ioutil"
+	"net"
+	"time"
 )
+
+///////////////////////////////////////////////////////////////////////////////
+//
+
+// Stop signal for stoppable listener
+type StopListenError struct {}
+func (e StopListenError) Error() string {
+	return "Stop listening"
+}
+
+var stopErr = StopListenError{}
+
+// The tcp keep alive listener that can be stopped
+
+type stoppableTCPListener struct {
+	*net.TCPListener
+	done <-chan interface {}
+}
+
+func NewStoppableTCPListener(addr string, done <-chan interface {}) (net.Listener, error) {
+
+	if addr == "" {
+		addr = ":http"
+	}
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return stoppableTCPListener{ln.(*net.TCPListener), done}, err
+}
+
+func (ln stoppableTCPListener) Accept() (c net.Conn, err error) {
+	tc, err := ln.AcceptTCP()
+	if err != nil {
+		return
+	}
+
+	select {
+	case <-ln.done:
+		err = stopErr
+		return
+	default:
+	}
+
+	tc.SetKeepAlive(true)
+	tc.SetKeepAlivePeriod(3 * time.Minute)
+	return tc, nil
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 type apiStatResp struct {
 	ResultCode int `json:"resultCode"`
@@ -42,10 +96,9 @@ func Listen(port int, done <-chan struct{}, smsIns... chan<- *SmsIn) {
 	})
 
 	server := &http.Server{
-		Addr: fmt.Sprintf(":%d", port),
-		// Additional server params
-		// ReadTimeout:    10 * time.Second,
-		// WriteTimeout:   10 * time.Second,
+		Addr			: fmt.Sprintf(":%d", port),
+		ReadTimeout		: 10 * time.Second,
+		WriteTimeout	: 10 * time.Second,
 		// MaxHeaderBytes: 1 << 20,
 	}
 
